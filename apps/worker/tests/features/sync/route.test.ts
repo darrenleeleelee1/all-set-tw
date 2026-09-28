@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CtbcConnectionError,
+  IbkrConnectionError,
+  IbkrFlexFormatError,
   ObankConnectionError,
   SkbankConnectionError,
 } from "@taiwan-fin-hub/connectors";
@@ -53,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   syncKgibank: vi.fn(),
   syncTaishin: vi.fn(),
   syncSkbank: vi.fn(),
+  syncIbkr: vi.fn(),
 }));
 
 vi.mock("../../../src/features/sync/einvoice-sync-service", () => ({
@@ -96,6 +99,7 @@ vi.mock("../../../src/features/sync/service", () => ({
   syncKgibank: mocks.syncKgibank,
   syncTaishin: mocks.syncTaishin,
   syncSkbank: mocks.syncSkbank,
+  syncIbkr: mocks.syncIbkr,
   syncTdcc: vi.fn(),
   SyncAlreadyRunningError: class SyncAlreadyRunningError extends Error {},
   SYNC_SCOPE_ALL: "all",
@@ -447,6 +451,36 @@ describe("SKBank sync route", () => {
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "SKBANK_CONNECTION_FAILED" },
+    });
+  });
+});
+
+describe("IBKR sync route", () => {
+  it("dispatches a manual sync", async () => {
+    const response = await syncRoutes.request(
+      "/connectors/ibkr/sync",
+      { method: "POST" },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.syncIbkr).toHaveBeenCalledWith(env, "manual");
+  });
+
+  it.each([
+    new IbkrConnectionError(),
+    new IbkrFlexFormatError("unexpected statement"),
+  ])("maps Flex Web Service failures to a connection error", async (error) => {
+    mocks.syncIbkr.mockRejectedValueOnce(error);
+    const response = await syncRoutes.request(
+      "/connectors/ibkr/sync",
+      { method: "POST" },
+      env,
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "IBKR_CONNECTION_FAILED" },
     });
   });
 });

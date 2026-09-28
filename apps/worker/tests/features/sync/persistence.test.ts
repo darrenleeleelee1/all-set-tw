@@ -6,13 +6,19 @@ import { prepareObankTimeDepositWrite } from "../../../src/features/sync/obank-t
 import {
   bankAccountRecord as mapAccount,
   bankBalanceSnapshotRecord as mapBalance,
+  investmentPositionRecord,
+  investmentTransactionRecord,
 } from "../../../src/features/sync/record-mapper";
+import { ibkrStalePositionsStatement } from "../../../src/features/sync/ibkr-positions";
 import {
   listBankAccounts,
   listBankTransactions,
   listBankTransactionsInRange,
 } from "../../../src/features/bank/repository";
-import { calculateBankDepositValue } from "../../../src/features/net-worth/repository";
+import {
+  calculateBankDepositValue,
+  listBankDepositHistoryDates,
+} from "../../../src/features/net-worth/repository";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -457,6 +463,178 @@ describe("staged sync persistence", () => {
       enabled: 0,
       intervalMinutes: 1440,
     });
+  });
+
+  it("seeds a disabled IBKR all-scope sync job", () => {
+    const db = createDb();
+
+    expect(
+      db.database
+        .prepare(
+          `SELECT connector_id AS connectorId, scope, enabled, interval_minutes AS intervalMinutes
+           FROM sync_jobs WHERE id = 'ibkr:all'`,
+        )
+        .get(),
+    ).toEqual({
+      connectorId: "ibkr",
+      scope: "all",
+      enabled: 0,
+      intervalMinutes: 1440,
+    });
+  });
+
+  it("stores IBKR option positions and transactions", async () => {
+    const db = createDb();
+    const d1 = db as unknown as D1Database;
+    const now = "2026-09-26T00:00:00.000Z";
+
+    await persistStagedSyncWrite(d1, {
+      records: [
+        investmentPositionRecord(
+          "ibkr",
+          {
+            sourceId: "ibkr:U1:700000001",
+            assetType: "option",
+            symbol: "AAPL  261218C00250000",
+            name: "AAPL 18DEC26 250 C",
+            quantity: -1,
+            marketValue: -500,
+            currency: "USD",
+            asOfDate: "2026-09-25",
+          },
+          now,
+        ),
+        investmentTransactionRecord(
+          "ibkr",
+          {
+            accountId: "ibkr:U1",
+            sourceId: "trade:1",
+            assetType: "option",
+            tradeDate: "2026-09-21",
+            quantity: 1,
+            price: 5,
+            amount: -501,
+            currency: "USD",
+          },
+          now,
+        ),
+      ],
+    });
+
+    expect(
+      db.database
+        .prepare(
+          `SELECT asset_type AS assetType, quantity, market_value AS marketValue
+           FROM investment_positions WHERE connector_id = 'ibkr'`,
+        )
+        .all(),
+    ).toEqual([{ assetType: "option", quantity: -1, marketValue: -500 }]);
+    expect(
+      db.database
+        .prepare(
+          `SELECT asset_type AS assetType, effective_date AS effectiveDate
+           FROM investment_transactions WHERE connector_id = 'ibkr'`,
+        )
+        .all(),
+    ).toEqual([{ assetType: "option", effectiveDate: "2026-09-21" }]);
+  });
+
+  it("keeps investment table constraints and indexes when allowing options", () => {
+    const db = createDb();
+
+    expect(() =>
+      db.database.exec(
+        `INSERT INTO investment_positions
+          (id, connector_id, source_id, asset_type, name, as_of_date, created_at, updated_at)
+         VALUES ('bad', 'ibkr', 'x', 'crypto', 'x', '2026-09-25', 'now', 'now')`,
+      ),
+    ).toThrow(/CHECK/);
+    expect(
+      db.database
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'index' AND name LIKE 'idx_investment_%' ORDER BY name`,
+        )
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toEqual([
+      "idx_investment_positions_as_of_date",
+      "idx_investment_positions_asset_type",
+      "idx_investment_positions_latest_scope",
+      "idx_investment_positions_page",
+      "idx_investment_transactions_effective_updated",
+      "idx_investment_transactions_symbol",
+      "idx_investment_transactions_trade_date",
+    ]);
+  });
+
+  it("lists existing bank deposit history dates within a range", async () => {
+    const db = createDb();
+    db.database.exec(`
+      INSERT INTO net_worth_history (id, date, net_worth, asset_type, source, snapshotted_at) VALUES
+        ('bank:deposit:2026-09-20', '2026-09-20', 1, 'deposit', 'bank', 'now'),
+        ('bank:deposit:2026-09-23', '2026-09-23', 1, 'deposit', 'bank', 'now'),
+        ('bank:deposit:2026-09-26', '2026-09-26', 1, 'deposit', 'bank', 'now'),
+        ('tdcc:stock:2026-09-24', '2026-09-24', 1, 'stock', 'tdcc', 'now');
+    `);
+
+    await expect(
+      listBankDepositHistoryDates(
+        db as unknown as D1Database,
+        "2026-09-21",
+        "2026-09-25",
+      ),
+    ).resolves.toEqual(["2026-09-23"]);
+  });
+
+  it("removes IBKR asset types that are absent from the latest statement", async () => {
+    const db = createDb();
+    const insert = (id: string, assetType: string, asOfDate: string) =>
+      db.database.exec(
+        `INSERT INTO investment_positions
+          (id, connector_id, source_id, asset_type, name, as_of_date, created_at, updated_at)
+         VALUES ('${id}', '${id.split(":")[0]}', '${id}', '${assetType}', '${id}', '${asOfDate}', 'now', 'now')`,
+      );
+    insert("ibkr:old-option", "option", "2026-09-20");
+    insert("ibkr:old-stock", "stock", "2026-09-20");
+    insert("ibkr:new-stock", "stock", "2026-09-25");
+    insert("tdcc:old-fund", "fund", "2026-09-20");
+
+    await db.batch([
+      ibkrStalePositionsStatement(db as unknown as D1Database, "2026-09-25", [
+        "stock",
+      ]) as unknown as D1PreparedStatement,
+    ]);
+
+    expect(
+      db.database
+        .prepare("SELECT id FROM investment_positions ORDER BY id")
+        .all()
+        .map((row) => (row as { id: string }).id),
+    ).toEqual(["ibkr:new-stock", "ibkr:old-stock", "tdcc:old-fund"]);
+  });
+
+  it("removes every older IBKR position when the latest statement is empty", async () => {
+    const db = createDb();
+    db.database.exec(
+      `INSERT INTO investment_positions
+        (id, connector_id, source_id, asset_type, name, as_of_date, created_at, updated_at)
+       VALUES ('ibkr:old', 'ibkr', 'ibkr:old', 'stock', 'old', '2026-09-20', 'now', 'now')`,
+    );
+
+    await db.batch([
+      ibkrStalePositionsStatement(
+        db as unknown as D1Database,
+        "2026-09-25",
+        [],
+      ) as unknown as D1PreparedStatement,
+    ]);
+
+    expect(
+      db.database
+        .prepare("SELECT COUNT(*) AS n FROM investment_positions")
+        .get(),
+    ).toEqual({ n: 0 });
   });
 
   it("links TDCC bank 822 records to the direct CTBC account", async () => {

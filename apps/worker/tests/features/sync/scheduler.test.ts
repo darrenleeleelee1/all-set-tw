@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   syncMegabank: vi.fn(),
   syncTaishin: vi.fn(),
   syncSkbank: vi.fn(),
+  syncIbkr: vi.fn(),
   syncNextbank: vi.fn(),
 }));
 
@@ -86,6 +87,7 @@ vi.mock("../../../src/features/sync/service", () => ({
   syncKgibank: vi.fn(),
   syncTaishin: mocks.syncTaishin,
   syncSkbank: mocks.syncSkbank,
+  syncIbkr: mocks.syncIbkr,
   syncTdcc: vi.fn(),
   SYNC_LOCK_LEASE_MS: 30 * 60 * 1000,
 }));
@@ -337,6 +339,16 @@ describe("scheduled sync rounds", () => {
       "scheduled",
       {},
     );
+  });
+
+  it("dispatches a scheduled IBKR job through the connector sync", async () => {
+    const job = syncJob("custom", "ibkr");
+    mocks.findOpenDefaultScheduleBatchId.mockResolvedValue(null);
+    mocks.findNextDueSyncJob.mockResolvedValue(job);
+
+    await runSchedulerTick(env(), scheduledController);
+
+    expect(mocks.syncIbkr).toHaveBeenCalledWith(expect.anything(), "scheduled");
   });
 
   it("dispatches a scheduled Cathay job without OTP overrides", async () => {

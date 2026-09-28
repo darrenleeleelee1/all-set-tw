@@ -215,7 +215,51 @@ function renderNextbankPanel() {
   return { ...result, api };
 }
 
+function renderIbkrPanel() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+  });
+  const api = {
+    get: vi.fn((path: string) => {
+      if (path === "/api/sync-jobs") {
+        return Promise.resolve([
+          syncJob({ id: "ibkr:all", connectorId: "ibkr", enabled: false }),
+        ]);
+      }
+      return Promise.resolve({});
+    }),
+    post: vi.fn(),
+    patch: vi.fn(),
+  } as unknown as ApiClient;
+  return render(
+    ConnectorPanel,
+    {
+      props: {
+        api,
+        connectorId: "ibkr",
+        demoMode: false,
+        title: "Interactive Brokers",
+        fields: connectorFields.ibkr as ConnectorField[],
+      },
+    },
+    {
+      wrapper: QueryClientProvider,
+      wrapperProps: { client: queryClient },
+    },
+  );
+}
+
 describe("ConnectorPanel", () => {
+  it("asks IBKR users for a masked Flex token and a Flex query ID", async () => {
+    const { getByLabelText, findByText } = renderIbkrPanel();
+
+    expect(getByLabelText("Flex Token")).toHaveAttribute("type", "password");
+    expect(getByLabelText("Flex Query ID")).toHaveAttribute("type", "text");
+    expect(
+      await findByText(/Activity Flex Query.*不要設定 IP 限制/),
+    ).toBeInTheDocument();
+  });
+
   it("enables First Bank web sync and keeps both verification paths available", async () => {
     const { api, findByText, getByRole } = renderFirstbankPanel();
 
