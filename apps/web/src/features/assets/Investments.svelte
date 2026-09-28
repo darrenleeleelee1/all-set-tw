@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tradeDisplay } from "@/features/assets/model/trade-display";
   import { createQuery } from "@tanstack/svelte-query";
   import { Search } from "@lucide/svelte";
   import EmptyState from "@/shared/ui/EmptyState.svelte";
@@ -10,7 +11,6 @@
     investmentsQuery,
     investmentTransactionsQuery,
   } from "@/data/investments/queries";
-  import type { InvestmentTransactionRow } from "@/data/investments/types";
   import {
     formatCurrency,
     formatDate,
@@ -51,12 +51,6 @@
       )
       .slice(0, 100),
   );
-  function tradeDisplay(t: InvestmentTransactionRow) {
-    if (t.amount != null && t.price != null && t.price !== 1)
-      return formatCurrency(t.amount, t.currency);
-    if (t.quantity != null) return `${formatNumber(t.quantity)} 股`;
-    return "金額未提供";
-  }
 </script>
 
 {#if $investments.isPending}
@@ -177,6 +171,7 @@
           <option value="stock">股票</option>
           <option value="etf">ETF</option>
           <option value="fund">基金</option>
+          <option value="option">選擇權</option>
         </Select>
       </div>
       {#if $trades.isPending}

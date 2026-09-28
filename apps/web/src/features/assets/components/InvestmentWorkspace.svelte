@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tradeDisplay } from "@/features/assets/model/trade-display";
   import type {
     InvestmentRow,
     InvestmentTransactionRow,
@@ -26,13 +27,6 @@
   } = $props();
 
   let tab = $state<"holdings" | "transactions">("holdings");
-
-  function tradeDisplay(trade: InvestmentTransactionRow) {
-    if (trade.amount != null && trade.price != null && trade.price !== 1)
-      return formatCurrency(trade.amount, trade.currency);
-    if (trade.quantity != null) return `${formatNumber(trade.quantity)} 股`;
-    return "金額未提供";
-  }
 </script>
 
 <div class={compact ? "grid gap-3" : "flex min-h-full flex-col"}>
