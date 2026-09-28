@@ -11,7 +11,7 @@
 - Tables：31
 - Explicit indexes：44
 - Other objects：0
-- Migrations：45
+- Migrations：50
 
 ## Tables
 
@@ -704,7 +704,7 @@ CREATE TABLE "exchange_rates" (
 | 1 | `id` | 持倉快照的系統識別碼。 | TEXT | NO | — | 1 | — |
 | 2 | `connector_id` | 產生此持倉的外部連接器識別碼。 | TEXT | NO | — | — | — |
 | 3 | `source_id` | 外部來源系統提供的持倉識別碼。 | TEXT | NO | — | — | — |
-| 4 | `asset_type` | 資產類型，目前限制為 stock、etf 或 fund。 | TEXT | NO | — | — | — |
+| 4 | `asset_type` | 資產類型，目前限制為 stock、etf、fund 或 option。 | TEXT | NO | — | — | — |
 | 5 | `symbol` | 證券、基金或 ETF 的代號。 | TEXT | YES | — | — | — |
 | 6 | `name` | 投資標的名稱。 | TEXT | NO | — | — | — |
 | 7 | `quantity` | 持有數量。 | REAL | YES | — | — | — |
@@ -736,7 +736,7 @@ CREATE TABLE "investment_positions" (
   id TEXT NOT NULL PRIMARY KEY,
   connector_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
-  asset_type TEXT NOT NULL CHECK (asset_type IN ('stock', 'etf', 'fund')),
+  asset_type TEXT NOT NULL CHECK (asset_type IN ('stock', 'etf', 'fund', 'option')),
   symbol TEXT,
   name TEXT NOT NULL,
   quantity REAL,
@@ -769,7 +769,7 @@ CREATE TABLE "investment_positions" (
 | 7 | `broker_name` | 券商或交易機構名稱。 | TEXT | YES | — | — | — |
 | 8 | `symbol` | 交易標的代號。 | TEXT | YES | — | — | — |
 | 9 | `name` | 交易標的名稱。 | TEXT | YES | — | — | — |
-| 10 | `asset_type` | 資產類型，例如 stock、etf、fund、bond 或 unknown。 | TEXT | YES | — | — | — |
+| 10 | `asset_type` | 資產類型，例如 stock、etf、fund、option、bond 或 unknown。 | TEXT | YES | — | — | — |
 | 11 | `trade_date` | 交易發生日期。 | TEXT | YES | — | — | — |
 | 12 | `posted_date` | 交易正式入帳日期。 | TEXT | YES | — | — | — |
 | 13 | `transaction_code` | 外部系統的交易類型代碼。 | TEXT | YES | — | — | — |
@@ -808,7 +808,7 @@ CREATE TABLE "investment_transactions" (
   broker_name TEXT,
   symbol TEXT,
   name TEXT,
-  asset_type TEXT CHECK (asset_type IN ('stock', 'etf', 'fund', 'bond', 'unknown')),
+  asset_type TEXT CHECK (asset_type IN ('stock', 'etf', 'fund', 'option', 'bond', 'unknown')),
   trade_date TEXT,
   posted_date TEXT,
   transaction_code TEXT,
@@ -819,7 +819,8 @@ CREATE TABLE "investment_transactions" (
   currency TEXT NOT NULL DEFAULT 'TWD',
   raw_payload TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL, effective_date TEXT AS (COALESCE(trade_date, posted_date, '')),
+  updated_at TEXT NOT NULL,
+  effective_date TEXT AS (COALESCE(trade_date, posted_date, '')),
   UNIQUE (connector_id, account_id, source_id)
 )
 ```
@@ -1605,8 +1606,8 @@ CREATE TABLE "tdcc_sync_runs" (
     'queued', 'initializing', 'processing', 'promoting',
     'completed', 'failed', 'needs_user_action'
   )),
-
-
+  -- The run retains the encrypted provider state it was initialized with.
+  -- It is never exposed in an API response or log.
   encrypted_config TEXT,
   encrypted_session TEXT,
   session_json TEXT CHECK (session_json IS NULL OR json_valid(session_json)),
@@ -1679,6 +1680,11 @@ Migration 是 schema 演進的 source of truth；若要了解某欄位的變更�
 - [`0045_preference_foreign_keys.sql`](../packages/db/migrations/0045_preference_foreign_keys.sql)
 - [`0046_transaction_self_foreign_keys.sql`](../packages/db/migrations/0046_transaction_self_foreign_keys.sql)
 - [`0047_sync_activity_details.sql`](../packages/db/migrations/0047_sync_activity_details.sql)
+- [`0048_kgibank_sync_job.sql`](../packages/db/migrations/0048_kgibank_sync_job.sql)
+- [`0049_megabank_sync_job.sql`](../packages/db/migrations/0049_megabank_sync_job.sql)
+- [`0050_nextbank_sync_job.sql`](../packages/db/migrations/0050_nextbank_sync_job.sql)
+- [`0051_ibkr_sync_job.sql`](../packages/db/migrations/0051_ibkr_sync_job.sql)
+- [`0052_investment_option_asset_type.sql`](../packages/db/migrations/0052_investment_option_asset_type.sql)
 
 ## 程式碼導覽
 
