@@ -19,6 +19,7 @@ import {
   prepareNextbankCaptchaSession,
   syncFirstbank,
   syncHncb,
+  syncIbkr,
   syncKgibank,
   syncTaishin,
   syncTdcc,
@@ -122,6 +123,9 @@ export const connectorRuntimeRegistry: Record<
     run: (env, trigger, _scope, overrides) =>
       syncMegabank(env, trigger, overrides as MegabankSyncOverrides),
     prepareChallenge: prepareMegabankCaptchaSession,
+  },
+  ibkr: {
+    run: (env, trigger) => syncIbkr(env, trigger),
   },
 };
 

@@ -1562,6 +1562,8 @@
                   ? "首次驗證會加入信任裝置；信任失效時需在手動同步中重新取得驗證碼。"
                   : connectorId === "megabank"
                     ? "兆豐同步直接使用 App API，以一般帳密登入並辨識五位數圖形驗證碼；也可改用人工輸入。"
-                    : "輸入完帳號密碼後，請先按「儲存設定」，再按「同步」。"}
+                    : connectorId === "ibkr"
+                      ? "請在 IBKR Client Portal 建立 Activity Flex Query（XML、Date Format 選 yyyyMMdd、Period 選 Last 365 Calendar Days，並加入 Net Asset Value (NAV) in Base 以補齊資產走勢），並產生 Flex Web Service Token；Token 不要設定 IP 限制。資料每日收盤後更新。"
+                      : "輸入完帳號密碼後，請先按「儲存設定」，再按「同步」。"}
   </p>
 </Card>

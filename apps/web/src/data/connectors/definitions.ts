@@ -89,4 +89,8 @@ export const connectorFields = {
     { key: "account", label: "使用者代號", type: "text" },
     { key: "password", label: "行動銀行登入密碼", type: "password" },
   ],
+  ibkr: [
+    { key: "flexToken", label: "Flex Token", type: "password" },
+    { key: "flexQueryId", label: "Flex Query ID", type: "text" },
+  ],
 } satisfies ConnectorFieldMap;

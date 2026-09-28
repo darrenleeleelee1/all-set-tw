@@ -634,6 +634,23 @@ export const connectorCatalog = {
       "captcha",
     ],
   },
+  ibkr: {
+    id: "ibkr",
+    title: "Interactive Brokers",
+    description: "美股股票、ETF、選擇權持倉、交易、股息與現金",
+    connectionMode: "api_credentials",
+    scopes: ["all"],
+    capabilities: [
+      "investment_position",
+      "investment_transaction",
+      "bank_account",
+      "bank_balance_snapshot",
+    ],
+    publicFields: [],
+    credentialFields: ["flexToken", "flexQueryId"],
+    secretStateFields: [],
+    resetOnCredentialChangeFields: [],
+  },
 } as const satisfies Record<string, ConnectorCatalogEntry>;
 
 export type ConnectorId = keyof typeof connectorCatalog;

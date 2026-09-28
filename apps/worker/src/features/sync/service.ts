@@ -12,12 +12,18 @@ import { prepareEsunAuthorizationWrite } from "./esun-authorizations";
 import { prepareSinopacAuthorizationWrite } from "./sinopac-authorizations";
 import { prepareObankTimeDepositWrite } from "./obank-time-deposits";
 import { prepareNextbankDepositWrite } from "./nextbank-deposits";
+import { ibkrNetWorthHistory } from "./ibkr-net-worth";
+import { ibkrStalePositionsStatement } from "./ibkr-positions";
+import { listExchangeRates } from "../exchange-rates/repository";
 import {
   EInvoiceProtocolUnavailableError,
   createCtbcConnector,
   CtbcVerificationRequiredError,
   createSkbankConnector,
   SkbankVerificationRequiredError,
+  createIbkrConnector,
+  IbkrVerificationRequiredError,
+  parseIbkrConfig,
   createObankConnector,
   ObankProtocolError,
   ObankVerificationRequiredError,
@@ -105,6 +111,7 @@ import { configEncryptionKey } from "../../platform/config";
 import { encryptJson, decryptJson } from "../../platform/crypto";
 import type { Env } from "../../platform/env";
 import { dateFromIso, rebuildBankDepositHistory } from "../net-worth/service";
+import { listBankDepositHistoryDates } from "../net-worth/repository";
 import {
   findLatestRecoverableScheduledBatchId,
   recoverLatestScheduledSyncSource,
@@ -1060,6 +1067,170 @@ export async function syncSkbank(
       persistedCursor && persistedCursor !== settings.sync_cursor,
     ),
   };
+}
+
+export async function syncIbkr(
+  env: Env,
+  trigger: SyncTrigger,
+): Promise<SyncOutcome> {
+  const connectorId = "ibkr";
+  const scope = "all";
+  const settings = await requireConnectorSettings(env.DB, connectorId);
+  const stored = await decryptJson<Record<string, unknown>>(
+    settings.encrypted_config,
+    configEncryptionKey(env),
+  );
+  const config = parseIbkrConfig({
+    ...stored,
+    ...parsePublicConnectorConfig(connectorId, settings.public_config),
+  });
+
+  console.log(
+    `[sync] ${connectorId}/${scope}: starting trigger=${trigger} (cursor=${settings.sync_cursor ? "set" : "none"})`,
+  );
+
+  let result: Awaited<
+    ReturnType<ReturnType<typeof createIbkrConnector>["sync"]>
+  >;
+  try {
+    result = await createIbkrConnector().sync(
+      config,
+      settings.sync_cursor ?? undefined,
+    );
+  } catch (error) {
+    if (error instanceof IbkrVerificationRequiredError) {
+      throw new NeedsUserActionError(error.message);
+    }
+    throw error;
+  }
+
+  const investmentTransactions = result.investmentTransactions ?? [];
+  const bankAccounts = result.bankAccounts ?? [];
+  const bankBalanceSnapshots = result.bankBalanceSnapshots ?? [];
+  console.log(
+    `[sync] ${connectorId}/${scope}: positions=${result.records.length} trades=${investmentTransactions.length} accounts=${bankAccounts.length} snapshots=${bankBalanceSnapshots.length}`,
+  );
+
+  const now = new Date().toISOString();
+  const records: SyncWriteRecord[] = [
+    ...result.records.map((position) =>
+      investmentPositionRecord(connectorId, position, now),
+    ),
+    ...investmentTransactions.map((transaction) =>
+      investmentTransactionRecord(connectorId, transaction, now),
+    ),
+    ...bankAccounts.map((account) =>
+      bankAccountRecord(connectorId, account, now),
+    ),
+    ...bankBalanceSnapshots.map((snapshot) =>
+      bankBalanceSnapshotRecord(connectorId, snapshot, now),
+    ),
+  ];
+  const statementDate = ibkrStatementDate(result.cursor);
+  const netWorthHistory = ibkrNetWorthHistory(
+    result.records,
+    result.equityHistory,
+    await listExchangeRates(env.DB),
+    statementDate,
+  );
+  records.push(
+    ...netWorthHistory.map((point) =>
+      netWorthHistoryRecord(connectorId, point, now),
+    ),
+  );
+  if (!netWorthHistory.some((point) => point.date === statementDate)) {
+    console.warn(
+      `[sync] ${connectorId}/${scope}: skipped statement net worth (missing exchange rate or statement date)`,
+    );
+  }
+
+  let persistedCursor: string | undefined;
+  const finalizeStatements: D1PreparedStatement[] = [];
+  if (result.cursor) {
+    const cursorState = splitConnectorCursorState(connectorId, result.cursor);
+    persistedCursor = cursorState.safeCursor;
+    const persistedConfig = { ...config, ...cursorState.secretState };
+    finalizeStatements.push(
+      connectorStateStatement(
+        env.DB,
+        connectorId,
+        await encryptConnectorConfig(env, connectorId, persistedConfig),
+        serializePublicConfig(connectorId, persistedConfig),
+        persistedCursor,
+        now,
+      ),
+    );
+  }
+
+  const newRecords = await persistStagedSyncWrite(env.DB, {
+    records,
+    afterPromoteStatements: [
+      ...(bankAccounts.length > 0
+        ? [linkCanonicalBankAccountsStatement(env.DB)]
+        : []),
+      ...(statementDate
+        ? [
+            ibkrStalePositionsStatement(
+              env.DB,
+              statementDate,
+              result.records.map((position) => position.assetType),
+            ),
+          ]
+        : []),
+    ],
+    finalizeStatements,
+  });
+
+  if (bankBalanceSnapshots.length > 0) {
+    await rebuildBankDepositHistory(
+      env.DB,
+      await ibkrDepositRebuildDates(env.DB, bankBalanceSnapshots, now),
+    );
+  }
+
+  return {
+    success: true,
+    connectorId,
+    scope,
+    records:
+      result.records.length +
+      investmentTransactions.length +
+      bankAccounts.length +
+      bankBalanceSnapshots.length,
+    newRecords,
+    cursorUpdated: Boolean(
+      persistedCursor && persistedCursor !== settings.sync_cursor,
+    ),
+  };
+}
+
+async function ibkrDepositRebuildDates(
+  db: D1Database,
+  snapshots: Array<{ asOfAt: string }>,
+  now: string,
+) {
+  const today = dateFromIso(now);
+  const snapshotDates = [
+    ...new Set(snapshots.map(({ asOfAt }) => asOfAt.slice(0, 10))),
+  ]
+    .filter((date) => date < today)
+    .sort();
+  const [from] = snapshotDates;
+  const to = snapshotDates.at(-1);
+  if (!from || !to) return [today];
+  const existing = new Set(await listBankDepositHistoryDates(db, from, to));
+  return [...snapshotDates.filter((date) => !existing.has(date)), today];
+}
+
+function ibkrStatementDate(cursor: string | undefined) {
+  if (!cursor) return undefined;
+  const parsed: unknown = JSON.parse(cursor);
+  return parsed &&
+    typeof parsed === "object" &&
+    "lastReportDate" in parsed &&
+    typeof parsed.lastReportDate === "string"
+    ? parsed.lastReportDate
+    : undefined;
 }
 
 export async function syncSinopac(

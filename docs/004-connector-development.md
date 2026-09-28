@@ -22,7 +22,7 @@ Connector 採三層 registry：
 
 | Mode                      | 適用情境                                                 | 現有範例                         |
 | ------------------------- | -------------------------------------------------------- | -------------------------------- |
-| `api_credentials`         | 帳密登入外部 API，可自行更新 token                       | 電子發票、中信、新光             |
+| `api_credentials`         | 帳密登入外部 API，可自行更新 token                       | 電子發票、中信、新光、IBKR       |
 | `api_captcha_session`     | App API 登入含 CAPTCHA，challenge 僅短暫加密保存         | 王道、兆豐銀行                   |
 | `api_device_otp`          | API 登入，首次裝置需要 OTP                               | 集保 e 存摺                      |
 | `browser_per_sync`        | 每次同步都必須以 Browser 登入與擷取                      | 國泰世華                         |
@@ -364,3 +364,19 @@ Migration `0043_merge_legacy_invoice_duplicates.sql` 以相同發票號碼整併
 ## 將來銀行
 
 使用銀行 Web API 與人工 CAPTCHA／自動辨識，單次帳密登入、查詢後登出，不接管其他工作階段。主帳戶查詢最近三個月，活存口袋讀取所有分頁後依日期篩選；定存口袋目前僅合成驗證，基金與美股未接入。排程預設停用，排程登入尚未真實驗收。設定 CAS 與原子寫入 guard 防止查詢期間變更帳密後仍寫入舊結果。
+
+### Interactive Brokers
+
+IBKR 使用 Flex Web Service v3，不需要 Browser 或驗證碼。使用者在 Client Portal 建立 Activity Flex Query（XML、Date Format `yyyyMMdd`、Period `Last 365 Calendar Days`，區段包含 Open Positions、Trades、Cash Transactions、Cash Report 與 Net Asset Value (NAV) in Base），並產生 Flex Web Service Token；Token 不得設定 IP 限制，因為 Workers 的對外 IP 不固定。修改既有 Query 的設定後，IBKR 可能在數小時內仍回傳快取的舊報表。
+
+- 先呼叫 `SendRequest` 取得 reference code，再輪詢 `GetStatement`。回應的 `<Url>` 只在 host 為 `*.interactivebrokers.com` 的 HTTPS 網址時採用，否則改用預設網址，避免 token 被送到其他網域。
+- 每個 token 限制每秒 1 次、每分鐘 10 次；輪詢總請求數控制在 9 次以內。1019 等暫時性錯誤碼會退避重試，逾時回報連線失敗，由下次同步重試。
+- 1010～1016、1020（token 過期、IP 限制、Query 無效等）標記為 `needs_user_action`。錯誤訊息只包含錯誤碼與 IBKR 訊息，不得包含 token。
+- 只同步 `assetCategory` 為 `STK` 或 `OPT` 的資料：`OPT` 對應 `option`，`STK` 中 `subCategory="ETF"` 對應 `etf`、其餘對應 `stock`；期貨、期貨選擇權（`FOP`）、債券略過。持倉忽略 `LOT` 明細，交易只取 `EXECUTION`，現金交易略過 `SUMMARY`。
+- `sourceId`：持倉為 `ibkr:{accountId}:{conid}`、交易為 `trade:{tradeID}`、股息與預扣稅為 `cash:{transactionID}`、現金帳戶為 `ibkr:{accountId}:cash:{currency}`。
+- 交易日只保存日期；IBKR 的時間以美東時間表示，不補造時區。金額沿用 `netCash`／`amount` 的正負號，交易數量一律為正；持倉數量與市值保留正負號，選擇權賣方部位為負值。選擇權交易名稱依 `openCloseIndicator` 標示開倉／平倉，`notes` 含 `Ep`、`Ex`、`A` 時分別標示到期、履約、被指派。
+- 現金以 `CashReportCurrency` 的 `endingCash` 建立 `settlement_cash` 帳戶與餘額快照，優先使用逐幣別列。報表只有 `BASE_SUMMARY` 時改用該列，幣別取自 `AccountInformation.currency`，其次為 `fxRateToBase=1` 的持倉或交易幣別（須唯一）；無法判定時不建立現金資料，不猜測幣別。
+- IBKR connector 不回傳 `netWorthHistory`，改回傳 `equityHistory`（NAV in Base 的 `EquitySummaryByReportDateInBase`，每日 `stock + options`，不含基金，以基準幣別計價）。`syncIbkr` 以本機匯率表換算成台幣，寫入 `source=ibkr`、`asset_type=stock` 的淨值歷史：報表日以持倉市值計算，與持倉頁一致；更早的日期使用 NAV，且一律以同步當下的匯率換算，不代表當日實際匯率。任一幣別缺匯率時略過該點，避免低估。
+- 報表只有一個 IBKR 現金帳戶且幣別等於 NAV 基準幣別時，connector 以 NAV 的 `cash` 產生報表日以前的每日現金快照；多幣別現金帳戶不回填，因為基準幣別合計無法拆回各幣別。`syncIbkr` 只重建尚無存款歷史的日期與今日，避免每次同步重算整年。
+- Cursor 只保存 `lastReportDate`，不含 token。
+- 持倉頁取各 connector、各資產類型的最新快照。IBKR 每次同步後刪除早於報表日、且未出現在本次報表中的資產類型（例如選擇權全部到期），仍持有的類型保留歷史快照。

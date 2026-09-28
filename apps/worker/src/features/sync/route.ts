@@ -1,6 +1,8 @@
 import {
   CtbcConnectionError,
   EInvoiceProtocolUnavailableError,
+  IbkrConnectionError,
+  IbkrFlexFormatError,
   ObankConnectionError,
   ObankProtocolError,
   SkbankConnectionError,
@@ -261,6 +263,15 @@ function registerSyncRoutes(api: Hono<AppBindings>) {
       c,
       withManualSyncLock(c.env, "skbank", SYNC_SCOPE_ALL, () =>
         runConnectorSync(c.env, "skbank", "manual"),
+      ),
+    );
+  });
+
+  api.post("/connectors/ibkr/sync", async (c) => {
+    return syncRouteResponse(
+      c,
+      withManualSyncLock(c.env, "ibkr", SYNC_SCOPE_ALL, () =>
+        runConnectorSync(c.env, "ibkr", "manual"),
       ),
     );
   });
@@ -791,6 +802,12 @@ async function syncRouteResponse(
         safeErrorMessage(error),
         502,
       );
+    }
+    if (
+      error instanceof IbkrConnectionError ||
+      error instanceof IbkrFlexFormatError
+    ) {
+      return jsonError("IBKR_CONNECTION_FAILED", safeErrorMessage(error), 502);
     }
     if (error instanceof TaishinConnectionError) {
       return jsonError(

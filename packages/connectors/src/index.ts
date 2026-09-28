@@ -225,6 +225,27 @@ export {
 export type { MegabankCaptchaChallenge } from "./megabank-mobile-api";
 import { megabankConfigSchema } from "./megabank";
 
+export {
+  createIbkrConnector,
+  IbkrConnectionError,
+  IbkrFlexFormatError,
+  IbkrVerificationRequiredError,
+  ibkrConfigSchema,
+  parseIbkrConfig,
+  parseIbkrStatement,
+  requireIbkrCredentials,
+} from "./ibkr-flex";
+export type {
+  IbkrConfig,
+  IbkrConnector,
+  IbkrConnectorOptions,
+  IbkrEquityPoint,
+  IbkrFetch,
+  IbkrStatementData,
+  IbkrSyncResult,
+} from "./ibkr-flex";
+import { ibkrConfigSchema } from "./ibkr-flex";
+
 const invoiceRecordSchema = z.object({
   sourceId: z.string().min(1),
   invoiceNumber: z.string().optional(),
@@ -837,6 +858,7 @@ export const connectorConfigSchemas = {
   hncb: hncbConfigSchema,
   kgibank: kgibankConfigSchema,
   megabank: megabankConfigSchema,
+  ibkr: ibkrConfigSchema,
 } satisfies Record<ConnectorId, z.ZodTypeAny>;
 
 export function parseConnectorConfig(

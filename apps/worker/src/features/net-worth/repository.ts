@@ -107,6 +107,26 @@ export async function findBankHistoryDateBounds(db: D1Database) {
   );
 }
 
+export async function listBankDepositHistoryDates(
+  db: D1Database,
+  from: string,
+  to: string,
+) {
+  const rows = await createDrizzle(db)
+    .select({ date: history.date })
+    .from(history)
+    .where(
+      and(
+        eq(history.source, "bank"),
+        eq(history.assetType, "deposit"),
+        sql`${history.date} BETWEEN ${from} AND ${to}`,
+      ),
+    )
+    .orderBy(asc(history.date))
+    .all();
+  return rows.map((row) => row.date);
+}
+
 export async function calculateBankDepositValue(db: D1Database, date: string) {
   const rows = await createDrizzle(db)
     .select({
